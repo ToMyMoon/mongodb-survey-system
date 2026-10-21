@@ -1,0 +1,17 @@
+.venv/
+.mongo/
+node_modules/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.log
+.server.pid
+.env
+.env.*
+!.env.example
+*.zip
+~$*
+.DS_Store
+Thumbs.db
+/test-results.xml
+/frontend-test-results.txt
