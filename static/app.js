@@ -89,14 +89,46 @@ function confirmAction(message){
   });
 }
 async function api(path,method='GET',data) {
-  const response=await fetch(path,{method,headers:{'Content-Type':'application/json',...(csrf?{'X-CSRF-Token':csrf}:{})},...(data===undefined?{}:{body:JSON.stringify(data)})});
+  const requestUser=user?._id||'';
+  const response=await fetch(path,{method,headers:{'Content-Type':'application/json','X-Survey-User':requestUser,...(csrf?{'X-CSRF-Token':csrf}:{})},...(data===undefined?{}:{body:JSON.stringify(data)})});
   const result=await response.json();
+  if(!path.startsWith('/api/auth/')){
+    const actualUser=response.headers?.get('X-Survey-User');
+    if(result.code==='account_changed'||(actualUser!==undefined&&actualUser!==null&&actualUser!==requestUser)){
+      await synchronizeAccount();throw new Error('登录账号已变化，本次操作已停止，请确认页面右上角账号。');
+    }
+    if(requestUser!==(user?._id||''))throw new Error('账号已切换，已忽略旧页面的响应。');
+  }
   if(!response.ok){const error=new Error(result.error||'请求失败');Object.assign(error,result,{status:response.status});throw error;}
   return result;
 }
+const authEventKey='survey-auth-change';
+let accountSync=null;
+function announceAccount(){try{localStorage.setItem(authEventKey,JSON.stringify({at:Date.now(),nonce:id()}));}catch(_){}}
+function synchronizeAccount(){
+  if(accountSync)return accountSync;
+  accountSync=(async()=>{
+    const response=await fetch('/api/auth/me');
+    if(!response.ok)throw new Error('暂时无法确认登录状态，请稍后重试。');
+    const result=await response.json();
+    if((user?._id||'')===(result.user?._id||'')&&csrf===result.csrf)return;
+    const changed=(user?._id||'')!==(result.user?._id||'');
+    user=result.user;csrf=result.csrf;
+    if(changed){
+      document.querySelectorAll('dialog').forEach(d=>{d.close();d.remove();});
+      currentEditor=null;editorChecks=null;fillingState=null;
+      root.replaceChildren();renderAccount();await route();
+      notify(user?`其他页面切换了账号，当前为 ${user.username}。原页面未保存的编辑未提交，请确认后继续。`:'其他页面已退出登录，请重新登录。');
+    }
+  })().finally(()=>{accountSync=null;});
+  return accountSync;
+}
+window.addEventListener('storage',event=>{if(event.key===authEventKey)synchronizeAccount().catch(showError);});
+window.addEventListener('focus',()=>synchronizeAccount().catch(showError));
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')synchronizeAccount().catch(showError);});
 const dateText=x=>x?new Date(x).toLocaleString('zh-CN'):'不限制';
 const actions=(...nodes)=>el('div',{class:'actions'},nodes);
-function renderAccount(){account.replaceChildren(...(user?[el('span',{},user.username),button('我的问卷',()=>location.href='/'),button('退出登录',async()=>{if(!await confirmAction('确认退出登录？'))return;await api('/api/auth/logout','POST',{});user=null;csrf=null;currentEditor=null;editorChecks=null;renderAccount();await route();})]:[]));}
+function renderAccount(){account.replaceChildren(...(user?[el('span',{},user.username),button('我的问卷',()=>location.href='/'),button('题目模板与题库',()=>location.href='/library'),button('退出登录',async()=>{if(!await confirmAction('确认退出登录？'))return;await api('/api/auth/logout','POST',{});user=null;csrf=null;currentEditor=null;editorChecks=null;fillingState=null;announceAccount();renderAccount();await route();})]:[]));}
 function eyeIcon(hidden){
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');
   const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Zm10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z');svg.append(path);
@@ -110,11 +142,11 @@ function auth(register=false) {
   const eye=button(eyeIcon(true),()=>{const hidden=password.type==='password';password.type=hidden?'text':'password';eye.setAttribute('aria-label',hidden?'隐藏密码':'显示密码');eye.setAttribute('title',hidden?'隐藏密码':'显示密码');eye.setAttribute('aria-pressed',String(hidden));eye.replaceChildren(eyeIcon(!hidden));},'password-toggle');
   eye.setAttribute('aria-label','显示密码');eye.setAttribute('title','显示密码');eye.setAttribute('aria-pressed','false');
   const form=el('form',{novalidate:''},checks.field('username','用户名',username,'1～15 个中文、字母、数字或下划线；区分大小写，不允许空格。'),checks.field('password','密码',el('div',{class:'password-control'},password,eye),'8～20 个字符；区分大小写，不允许空白。'),el('button',{class:'primary',type:'submit'},register?'注册并登录':'登录'));
-  form.addEventListener('submit',async e=>{e.preventDefault();if(!checks.checkAll())return;try{const result=await api(`/api/auth/${register?'register':'login'}`,'POST',{username:username.value,password:password.value});user=result.user;csrf=result.csrf;renderAccount();await route();}catch(error){checks.remote(error.message,['username','password']);}});
+  form.addEventListener('submit',async e=>{e.preventDefault();if(!checks.checkAll())return;try{const result=await api(`/api/auth/${register?'register':'login'}`,'POST',{username:username.value,password:password.value});user=result.user;csrf=result.csrf;announceAccount();renderAccount();await route();}catch(error){checks.remote(error.message,['username','password']);}});
   root.replaceChildren(el('section',{class:'narrow card focus'},el('h1',{},register?'创建账号':'欢迎回来'),el('p',{class:'muted'},'登录后创建问卷，或继续填写收到的问卷。'),actions(button('登录',()=>auth(false),register?'':'primary'),button('注册',()=>auth(true),register?'primary':'')),el('hr'),form));
   checks.refresh();
 }
-async function route(){if(!user)return auth();const match=location.pathname.match(/^\/survey\/([0-9a-f]{24})$/);if(match)await fill(match[1]);else await dashboard();}
+async function route(){if(!user)return auth();const match=location.pathname.match(/^\/survey\/([0-9a-f]{24})$/);if(match)await fill(match[1]);else if(location.pathname==='/library')await libraryPage();else await dashboard();}
 async function dashboard(){
   currentEditor=null;editorChecks=null;
   const data=await api('/api/surveys');
@@ -146,7 +178,7 @@ function renderEditor(announce=true){
   const info=el('div',{class:'card form-grid'},checks.field('title','标题（最多 30 字）',input(s.title,v=>set('title',v),{disabled:published,'aria-label':'标题（最多 30 字）'}),'必填，最多 30 个 Unicode 字符。'),checks.field('deadline','截止时间（本地时间，可留空）',el('div',{},dateInput,dateStatus)),checks.field('description','说明（最多 100 字）',el('textarea',{disabled:published,'aria-label':'说明（最多 100 字）',onInput:e=>set('description',e.target.value)},s.description),'最多 100 个 Unicode 字符，可留空。','wide'),check('允许匿名填写',s.allowAnonymous,v=>set('allowAnonymous',v),published),check('允许同一用户多次填写（首次发布后锁定）',s.allowMultipleSubmissions,v=>set('allowMultipleSubmissions',v),published||s.versionCounter>0));
   const questionArea=checks.bind('questions',el('div',{},s.questions.map((q,index)=>renderQuestion(q,index,published))),'发布前至少添加一道题目。');
   root.replaceChildren(el('div',{class:'hero'},el('div',{},el('h1',{},s.title||'编辑问卷'),el('p',{class:'muted'},published?'当前正在接收填写。关闭后可编辑并发布新版本。':'草稿允许暂不完整，发布时会检查全部题目和规则。')),actions(button('返回列表',dashboard),button('查看统计',()=>statistics(s._id)))),el('div',{class:'row'},el('span',{class:`badge ${published?'':'draft'}`},published?'已发布':'草稿'),el('a',{href:`/survey/${s._id}`,target:'_blank',rel:'noopener'},`${location.origin}/survey/${s._id}`)),info,questionArea,
-    !published?el('div',{class:'card'},el('h3',{},'添加题目'),actions(Object.entries(types).map(([kind,label])=>button(`＋ ${label}`,()=>{s.questions.push(newQuestion(kind));renderEditor();})))):el('span',{hidden:true}),
+    !published?el('div',{class:'card'},el('h3',{},'添加题目'),button('从模板或题库选题',()=>pickTemplate()),actions(Object.entries(types).map(([kind,label])=>button(`＋ ${label}`,()=>{s.questions.push(newQuestion(kind));renderEditor();})))):el('span',{hidden:true}),
     el('div',{class:'sticky actions'},...(published?[button('复制问卷链接',()=>copySurveyLink(s._id),'primary'),button('返回主页',async()=>{await deadlineSaveQueue;await dashboard();}),button('关闭并进入草稿',async()=>{if(!await confirmAction('关闭后将停止接收提交，并回到草稿编辑阶段。继续吗？'))return;await deadlineSaveQueue;await api(`/api/surveys/${s._id}/close`,'POST',{revision:s.revision});await edit(s._id);notify('已关闭，可修改并重新发布');},'danger')]:[button('保存草稿',async()=>{await saveEditor();notify('保存成功');},'primary'),button('发布',async()=>{if(!checks.checkAll())return;if(!await confirmAction('确认发布这份问卷？发布后可通过链接填写；修改题目需要先关闭。'))return;if(!checks.checkAll())return;await saveEditor();await api(`/api/surveys/${s._id}/publish`,'POST',{revision:s.revision});await edit(s._id);notify('已发布新版本');},'primary')])));
   checks.refresh();
   if(announce){const problem=checks.refresh().find(item=>!item.incomplete);if(problem)checks.refresh(problem.keys[0],'input');}
@@ -157,7 +189,7 @@ function renderQuestion(q,index,disabled){
   const checks=editorChecks,key=suffix=>`${q._id}:${suffix}`;
   const section=el('section',{class:'card question'});
   const tools=disabled?[]:[button('上移',()=>{if(index>0){[s.questions[index-1],s.questions[index]]=[s.questions[index],s.questions[index-1]];renderEditor();}}),button('下移',()=>{if(index<s.questions.length-1){[s.questions[index+1],s.questions[index]]=[s.questions[index],s.questions[index+1]];renderEditor();}}),button('删除',async()=>{if(await confirmAction('删除此题？引用它的跳转需要手动修复。')){s.questions.splice(index,1);renderEditor();}},'danger')];
-  section.append(el('div',{class:'section-head'},el('h2',{},`${index+1}. ${types[q.type]}`),actions(tools)),checks.field(key('title'),'题目内容',el('textarea',{disabled,'aria-label':'题目内容',onInput:e=>q.title=e.target.value},q.title),'请填写题目内容。'),checks.bind(key('required'),check('必答题',q.required,v=>q.required=v,disabled)));
+  section.append(el('div',{class:'section-head'},el('h2',{},`${index+1}. ${types[q.type]}`),actions(...tools,button('加入模板',()=>saveQuestionTemplate(q)))),checks.field(key('title'),'题目内容',el('textarea',{disabled,'aria-label':'题目内容',onInput:e=>q.title=e.target.value},q.title),'请填写题目内容。'),checks.bind(key('required'),check('必答题',q.required,v=>q.required=v,disabled)));
   section.append(field('题型',select(Object.entries(types),q.type,async kind=>{
     if(await confirmAction('更换题型会清空本题选项、校验与跳转规则，保留题目文字和标识。继续吗？')){
       const replacement=newQuestion(kind);Object.assign(q,{type:kind,options:replacement.options,validation:{},jumpRules:[]});
@@ -354,3 +386,4 @@ async function sendPending(){
   }finally{f.sending=false;}
 }
 (async()=>{try{const result=await api('/api/auth/me');user=result.user;csrf=result.csrf;renderAccount();await route();}catch(e){root.replaceChildren(el('div',{class:'error-box'},e.message));}})();
+

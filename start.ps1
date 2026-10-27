@@ -1,6 +1,6 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
-$servicePort = if ($env:SURVEY_PORT) { $env:SURVEY_PORT } else { '5000' }
+$servicePort = if ($env:SURVEY_PORT) { $env:SURVEY_PORT } else { '5001' }
 $projectPython = Join-Path $PSScriptRoot '.venv/Scripts/python.exe'
 if (-not (Test-Path -LiteralPath $projectPython)) {
     py -3 -m venv .venv
@@ -17,3 +17,4 @@ if ($LASTEXITCODE -eq 10) {
 }
 Write-Host "打开 http://127.0.0.1:$servicePort；按 Ctrl+C 停止网页服务。"
 & $projectPython app.py
+

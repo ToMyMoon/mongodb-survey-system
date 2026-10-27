@@ -15,3 +15,5 @@ __pycache__/
 Thumbs.db
 /test-results.xml
 /frontend-test-results.txt
+
+.npm-cache/

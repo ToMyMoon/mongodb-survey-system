@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-27",
+  "firstStageCheckedFiles": 23,
+  "firstStageChangedFiles": [],
+  "productionCheckedFiles": 16,
+  "productionSourcesUnchanged": true,
+  "comparedPackageSHA256": "782C64A63C469F3AE9C6D7B0E2165AF22A04D66F1EAED5D12B28696A3D4FDEBA",
+  "databaseScope": "后端使用第二阶段端口的随机 survey_test_ 库，不连接第一阶段或写入体验业务库"
+}

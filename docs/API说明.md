@@ -1,102 +1,63 @@
-# API 说明
+# 第二阶段 API 说明
 
-基础地址 `http://127.0.0.1:5000`。JSON 请求和响应，ObjectId 在接口中为 24 位十六进制字符串；时间为带时区的 ISO 8601，数据库存 UTC。数字答案数据库存 Decimal128，接口以十进制字符串输出以保留精度。submissionCode 数据库存 Long，接口必须使用 18 位数字字符串。
+基础地址为 http://127.0.0.1:5001 。登录、CSRF、同源检查、错误结构、ObjectId、时间和精确数字输出沿用第一阶段。写操作需登录 Cookie 和 X-CSRF-Token。
 
-## 登录与请求校验
+## 模板
 
-| 方法及路径 | 输入 | 成功响应 |
-| --- | --- | --- |
-| POST /api/auth/register | username、password | user、csrf，并设置 HttpOnly Cookie |
-| POST /api/auth/login | username、password | 同上 |
-| GET /api/auth/me | 无 | user、csrf，未登录时为 null |
-| POST /api/auth/logout | 空对象 | 清除服务器会话及 Cookie |
-
-后续请求携带登录 Cookie；写接口（除注册登录）携带 `X-CSRF-Token`，值来自登录或 me 接口。浏览器 Origin 必须与服务同源。所有写接口用 `Content-Type: application/json`。
-
-## 创建者管理
-
-| 方法及路径 | 输入 | 响应与行为 |
-| --- | --- | --- |
-| GET /api/surveys | 无 | surveys：自己的问卷摘要，不含 questions |
-| POST /api/surveys | 空对象 | 201，新草稿及 revision=0 |
-| GET /api/surveys/{id} | 无 | 完整管理文档 |
-| PUT /api/surveys/{id} | revision 及待修改字段 | 更新后文档，revision 增加 |
-| POST /api/surveys/{id}/publish | revision | 201，新的不可变发布版本 |
-| POST /api/surveys/{id}/close | revision | status=draft |
-| GET /api/surveys/{id}/versions | 无 | versions：历史版本摘要 |
-
-以上接口只允许创建者。PUT 可修改 title、description、allowAnonymous、allowMultipleSubmissions、deadline、questions；发布中只允许改变 deadline；allowMultipleSubmissions 在首次发布后始终锁定。revision 用于避免多个编辑页面相互覆盖。
-
-题型使用 single、multiple、text、number。嵌入题目和选项的 _id 是稳定 24 位十六进制字符串。题目统一携带 options、validation、jumpRules，非选择题 options 为空数组。
-
-页面新建题目默认 required=true；文本题 validation.minLength=1，数字题 validation.integerOnly=true，均可修改。此为页面创建默认值，不覆盖已有数据。输入阶段增加前端校验，后端仍执行原有校验。发布和退出确认均由页面完成，取消不发送相应请求。发布中修改截止时间自动调用 PUT，仅发送 revision、deadline，连续修改依次使用最新 revision。复制问卷链接不需要新增接口。
-
-跳转规则示例：
-
-```json
-{
-  "condition": {
-    "operator": "all",
-    "conditions": [
-      {"operator": "hasAnswer"},
-      {"operator": "between", "value": {"min": "18", "max": "30"}}
-    ]
-  },
-  "targetQuestionId": null
-}
-```
-
-## 填写者
-
-| 方法及路径 | 输入 | 响应 |
-| --- | --- | --- |
-| GET /api/fill/{id} | 无 | surveyId、当前 version、deadline、重复许可 |
-| POST /api/fill/{id}/step | surveyVersionId、questionId、value | 校验当前答案并返回 nextQuestionId，null 表示结束 |
-| POST /api/fill/{id}/submit | 见下例 | 201 新提交；200 相同请求重试，返回原答卷 ID |
-
-提交格式：
-
-```json
-{
-  "surveyVersionId": "24位发布版本ID",
-  "submissionCode": "123456789012345678",
-  "isAnonymous": false,
-  "answers": [
-    {"questionId": "24位题目ID", "value": "文本或单选ID"}
-  ]
-}
-```
-
-多选 value 为选项 ID 数组；数字可用普通十进制字符串传入，最终保存为 Decimal128。提交者身份和 repeatRestricted 只由服务器确定，不采用客户端同名字段。后端从首题重新计算路径，剔除路径外的已知题目答案，拒绝未知或重复题目标识，并验证路径上必答和限制。
-
-响应包含 responseId、submittedAt、replayed。相同校验码只有用户、问卷、版本、匿名选择和规范化答案均一致时才返回原成功结果。不得修改已有答卷。确认成功后的网络重试即使问卷已关闭，仍可取得原结果。
-
-## 统计与答卷
-
-| 方法及路径 | 说明 |
+| 方法与路径 | 输入及行为 |
 | --- | --- |
-| GET /api/surveys/{id}/stats | 整卷统计，默认最近发布版本 |
-| GET /api/surveys/{id}/stats/{questionId} | 单题统计 |
-| GET /api/surveys/{id}/responses | 逐份答卷 |
+| GET /api/templates | scope=all/mine/shared/history，默认 mine；可带 bankId，返回当前可访问模板；history 返回当前用户移除的收录（包括共享模板）；权限失效只返回说明占位 |
+| GET /api/templates/{id} | 自有模板含来源问卷信息；他人模板仅当前共享有效时开放正文，不返回其来源问卷标识 |
+| POST /api/templates | requestId、surveyId、questionId；草稿携带 revision，发布来源携带 versionId；可带 bankIds 数组、newBanks 名称数组，默认选默认题库；兼容旧 bankId。只取服务器已保存的单题内容 |
+| POST /api/templates/{id}/use | surveyId、revision；服务器检查权限和草稿状态，创建新实例及新选项 ID、清空跳转、记录来源，直接追加并保存到问卷 |
+| DELETE /api/templates/{id} | 自己保存或共享给自己的模板均可；只移除当前用户收录及自己的题库关联，不撤销共享，不影响他人 |
+| POST /api/templates/{id}/restore | 恢复当前用户收录（仍需当前查看权限），保留原 ID；返回 skippedBanks，表示内容重复而跳过的自己的原分类，不改变共享 |
+| GET /api/templates/{id}/history | 来源及可见分支，逐节点检查权限；不可读节点不返回正文，提供 accessReason；个人移除节点返回 canRestore |
+| GET /api/templates/{id}/usage | 仅当前用户自己的问卷，包含发布版本、当前使用及内容修改标记，按稳定问卷 ID 计数 |
+| GET /api/templates/{id}/stats | 当前用户自己的问卷，匹配直接来源或明确映射且内容一致；可带 surveyId、versionId、from、to；时间需含时区，含边界 |
 
-可带 `?versionId=...` 查看历史版本。只允许创建者。统计响应包含版本、提交份数、去重填写人数、题目统计；选择题包含零次选项，填空包含所有有效内容，数字增加 average（无答案为 null）。不跨版本合并。
+模板正文不提供 PUT/PATCH 编辑接口。内容不变的派生保存返回 409 unchanged_template；同一 requestId 携带相同请求重试返回原模板，不同请求内容冲突。成功保存草稿模板会增加问卷 revision，客户端应重新载入。事务确保模板、来源关联和本次分类一起提交或回滚，之前已经保存的草稿保留。
 
-答卷响应仅返回答卷 ID、版本、答案、时间、匿名标记；非匿名增加 username。匿名不返回 respondentId、username、submissionCode、payloadHash。
+草稿模板保存和选用接口的 revision 必须为 JSON 整数，不接受 true/false 或浮点值。同一实例连续另存以最近保存的模板为直接父来源；保留最初使用来源用于追溯及统计，不将整个来源链自动合并。
 
-## 错误
+统计返回 answerCount、respondentCount、sources；选择题包含各选项 count。文本返回内容和时间，不返回填写者标识；数字增加 average、minimum、maximum、distribution（value、count、percentage）。所有结果仅针对当前用户问卷。按源题选项顺序映射到模板选项，技术 ID 不影响内容比较。
 
-统一包含 error（中文说明）、code。校验错误可能附 questionId。
+## 共享
 
-| 状态或 code | 含义 |
+| 方法与路径 | 输入及行为 |
 | --- | --- |
-| 400 invalid | 格式、配置或答案不合法 |
-| 401 login_required | 未登录或会话过期 |
-| 403 | CSRF 或来源校验失败 |
-| 404 | 无权访问或资源不存在 |
-| 409 edit_conflict | 编辑版本过旧，需重新载入 |
-| 409 closed / expired | 未开放或已截止 |
-| 409 version_changed | 旧填写版本已失效，保留旧稿并开始新版 |
-| 409 already_submitted | 此用户已提交禁止重复填写的问卷 |
-| 409 submission_conflict | 同一码被用于不同内容或用户 |
-| 413 document_too_large | 超出数据库单文档容量，未保存 |
-| 503 database_error | 数据库操作未确认成功，保留原请求重试 |
+| GET /api/users/lookup?username=... | 精确查找完整用户名，仅返回用户名及 ID |
+| GET /api/templates/{id}/shares | 作者查看当前有效共享对象 |
+| POST /api/templates/{id}/shares | 作者携带查找确认后的 username、userId，重复授权不产生重复关系 |
+| DELETE /api/templates/{id}/shares/{userId} | 作者撤销共享，接收者已保存副本不受影响 |
+
+无公开广场或任何人可用的共享链接。共享接收者不可管理原模板共享；自己的修改派生模板可以共享。共享不授予他人问卷或答卷访问权。
+
+## 个人题库
+
+| 方法与路径 | 输入及行为 |
+| --- | --- |
+| GET /api/banks | 确保默认题库及旧未分类的一次性归类，返回自己的可用题库（isDefault 标识） |
+| POST /api/banks | name（1～100 字）、description，可创建多个；禁止空白、同名和系统保留名 |
+| PUT /api/banks/{id} | 作者修改自定义题库 name、description；默认题库不可改名 |
+| DELETE /api/banks/{id} | 删除自定义题库及分类可用状态，不删除模板；默认题库不可删除 |
+| POST /api/banks/{id}/items | templateId，可收录自己及当前获共享模板，同库相同模板幂等，相同内容的另一模板返回 409 duplicate_content |
+| DELETE /api/banks/{id}/items/{templateId} | 只移除分类关系，不删除模板 |
+
+题库内容唯一约束由字段规范化摘要和活动关系唯一索引共同保证；必答参与题库判重，但不参与统计归并。模板和选项 ID、作者、来源不参与内容比较。
+
+## 原接口兼容
+
+原账号、问卷管理、发布、填写及按问卷版本统计接口保留。普通 PUT /api/surveys/{id} 不允许伪造或改变 sourceTemplateId、savedTemplateIds，来源由模板保存及选用接口维护。旧 answers 的 questionId 仍是问卷实例 ID，不改为模板 ID；历史发布快照和答卷不回写。
+
+## 2026-10-27 补充协议
+
+POST /api/templates/{id}/banks：bankIds、newBanks，多题库追加归类及命名新建在同一事务提交。取消勾选不会删除已有分类，移出分类沿用 DELETE /api/banks/{id}/items/{templateId}。
+
+模板创建返回 skippedBanks；默认题库存在相同内容时跳过默认分类并说明，仍保留本份个人模板及其他选择。newBanks 随 requestId 重试不会重复创建。bankIds=[] 表示主动不分类；不传时使用默认题库。列表/详情补充 bankIds、readable，deleted 在响应中表示当前用户已移除；不是正文全局删除状态。已失效共享的移除记录不返回 question。
+
+新前端写请求发送 X-Survey-User（当前显示的账号 ID），与 Cookie 实际账号不同则返回 409 account_changed，写操作不执行；所有 API 响应附同名头表示实际账号。原 CSRF 和同源检查继续生效。同步通知不携带密码、Cookie 或 CSRF。
+
+### 保存题库弹窗交互修订
+
+当前界面只列题库复选项与“＋ 新建题库”；点击加号后弹窗输入名称，点击“创建”单独调用 POST /api/banks。创建成功后新题库勾选、默认题库取消勾选、其他选择保留；多次创建均保留勾选。模板保存提交 bankIds，不再从界面发送 newBanks。新题库一经创建就独立保留，即使随后取消或未完成模板保存。后端 newBanks 兼容协议仍保留，其事务语义未改变。

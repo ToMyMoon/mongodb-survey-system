@@ -10,7 +10,7 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
 ROOT = Path(__file__).resolve().parent
-URI = "mongodb://127.0.0.1:27018/?directConnection=true"
+URI = "mongodb://127.0.0.1:27019/?directConnection=true"
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
         direct.admin.command("ping")
     except PyMongoError:
         process = subprocess.Popen([binary, "--dbpath", str(data), "--logpath", str(data / "mongod.log"),
-                                    "--logappend", "--port", "27018", "--bind_ip", "127.0.0.1", "--replSet", "survey-rs"],
+                                    "--logappend", "--port", "27019", "--bind_ip", "127.0.0.1", "--replSet", "survey-stage2-rs"],
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         (data / "mongod.pid").write_text(str(process.pid), encoding="utf-8")
         for _ in range(40):
@@ -40,17 +40,17 @@ def main():
     options = direct.admin.command("getCmdLineOpts")["parsed"]
     replication = options.get("replication", {})
     configured = replication.get("replSetName") or replication.get("replSet")
-    if configured != "survey-rs" or Path(options.get("storage", {}).get("dbPath", "")).resolve() != data.resolve():
-        raise SystemExit("27018 端口已有其他 MongoDB 实例，未修改该实例。")
+    if configured != "survey-stage2-rs" or Path(options.get("storage", {}).get("dbPath", "")).resolve() != data.resolve():
+        raise SystemExit("27019 端口已有其他 MongoDB 实例，未修改该实例。")
     try:
         direct.admin.command("replSetGetStatus")
     except PyMongoError as exc:
         if getattr(exc, "code", None) != 94:
             raise
-        direct.admin.command("replSetInitiate", {"_id": "survey-rs", "members": [{"_id": 0, "host": "127.0.0.1:27018"}]})
+        direct.admin.command("replSetInitiate", {"_id": "survey-stage2-rs", "members": [{"_id": 0, "host": "127.0.0.1:27019"}]})
     for _ in range(60):
         if direct.admin.command("hello").get("isWritablePrimary"):
-            print("MongoDB 已就绪：127.0.0.1:27018，副本集 survey-rs。")
+            print("MongoDB 已就绪：127.0.0.1:27019，副本集 survey-stage2-rs。")
             direct.close()
             return
         time.sleep(.5)
@@ -59,3 +59,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

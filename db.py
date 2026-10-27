@@ -17,6 +17,21 @@ def initialize_database(db):
         "sessions": {"bsonType": "object", "required": ["userId", "csrf", "expiresAt"],
                      "properties": {"userId": {"bsonType": "objectId"}, "expiresAt": {"bsonType": "date"}}},
     }
+    schemas.update({
+        "template_entries": {"bsonType": "object", "required": ["userId", "templateId", "removed"],
+            "properties": {"userId": {"bsonType": "objectId"}, "templateId": {"bsonType": "objectId"}, "removed": {"bsonType": "bool"}}},
+        "question_templates": {"bsonType": "object", "required": ["ownerId", "question", "fingerprint", "statsFingerprint", "deleted", "createdAt", "source", "requestId"],
+            "properties": {"ownerId": {"bsonType": "objectId"}, "question": {"bsonType": "object"}, "deleted": {"bsonType": "bool"}}},
+        "question_shares": {"bsonType": "object", "required": ["templateId", "userId", "active"],
+            "properties": {"templateId": {"bsonType": "objectId"}, "userId": {"bsonType": "objectId"}, "active": {"bsonType": "bool"}}},
+        "question_banks": {"bsonType": "object", "required": ["ownerId", "name", "description", "deleted"],
+            "properties": {"ownerId": {"bsonType": "objectId"}, "name": {"bsonType": "string"}, "description": {"bsonType": "string"}, "deleted": {"bsonType": "bool"}}},
+        "question_bank_items": {"bsonType": "object", "required": ["bankId", "templateId", "fingerprint", "active"],
+            "properties": {"bankId": {"bsonType": "objectId"}, "templateId": {"bsonType": "objectId"}, "active": {"bsonType": "bool"}}},
+        "template_sources": {"bsonType": "object", "required": ["templateId", "surveyId", "versionId", "questionId", "statsFingerprint"],
+            "properties": {"templateId": {"bsonType": "objectId"}, "surveyId": {"bsonType": "objectId"}, "questionId": {"bsonType": "string"}}},
+        "template_state": {"bsonType": "object", "required": ["revision"]},
+    })
     existing = set(db.list_collection_names())
     for name, schema in schemas.items():
         validator = {"$jsonSchema": schema}
@@ -32,3 +47,18 @@ def initialize_database(db):
                               partialFilterExpression={"repeatRestricted": True}, name="unique_single_response")
     db.responses.create_index([("surveyId", 1), ("surveyVersionId", 1)])
     db.sessions.create_index("expiresAt", expireAfterSeconds=0)
+    db.question_templates.create_index([("ownerId", 1), ("deleted", 1), ("createdAt", -1)])
+    db.question_templates.create_index([("ownerId", 1), ("requestId", 1)], unique=True)
+    db.question_templates.create_index("sourceTemplateId")
+    db.question_templates.create_index([("source.surveyId", 1), ("source.questionId", 1)])
+    db.question_shares.create_index([("templateId", 1), ("userId", 1)], unique=True)
+    db.question_shares.create_index([("userId", 1), ("active", 1)])
+    db.template_entries.create_index([("userId", 1), ("templateId", 1)], unique=True)
+    db.template_entries.create_index([("userId", 1), ("removed", 1)])
+    db.question_banks.create_index([("ownerId", 1), ("deleted", 1)])
+    db.question_banks.create_index("ownerId", unique=True, partialFilterExpression={"isDefault": True}, name="unique_default_bank")
+    db.question_bank_items.create_index([("bankId", 1), ("templateId", 1)], unique=True)
+    db.question_bank_items.create_index([("bankId", 1), ("fingerprint", 1)], unique=True,
+        partialFilterExpression={"active": True}, name="unique_active_bank_content")
+    db.question_bank_items.create_index("templateId")
+    db.template_sources.create_index([("templateId", 1), ("surveyId", 1), ("versionId", 1), ("questionId", 1)], unique=True)

@@ -15,6 +15,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from db import initialize_database
+from template_library import register_library, protect_provenance
 from engine import (BusinessError, require, check_shape, check_publish, normalize_answer,
                     normalize_path, next_question, canonical_number)
 
@@ -62,12 +63,12 @@ def deadline(value):
 def create_app(config=None):
     app = Flask(__name__)
     app.json.ensure_ascii = False
-    app.config.update(MONGO_URI=os.getenv("SURVEY_MONGO_URI", "mongodb://127.0.0.1:27018/?replicaSet=survey-rs"),
-                      MONGO_DB=os.getenv("SURVEY_MONGO_DB", "survey_coursework"),
+    app.config.update(MONGO_URI=os.getenv("SURVEY_MONGO_URI", "mongodb://127.0.0.1:27019/?replicaSet=survey-stage2-rs"),
+                      MONGO_DB=os.getenv("SURVEY_MONGO_DB", "survey_coursework_stage2"),
                       SESSION_HOURS=8, COOKIE_SECURE=False)
     if config:
         app.config.update(config)
-    client = MongoClient(app.config["MONGO_URI"], tz_aware=True, serverSelectionTimeoutMS=5000)
+    client = MongoClient(app.config["MONGO_URI"], tz_aware=True, serverSelectionTimeoutMS=5001)
     client.admin.command("ping")
     require(client.admin.command("hello").get("setName") is not None,
             "MongoDB 需运行副本集以支持事务，请使用 start.ps1 启动", status=503)
@@ -96,6 +97,10 @@ def create_app(config=None):
         if request.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("Origin")
             require(not origin or origin == request.host_url.rstrip("/"), "请求来源不被允许", status=403)
+            expected_user = request.headers.get("X-Survey-User")
+            if expected_user is not None and request.path not in ("/api/auth/login", "/api/auth/register"):
+                require(expected_user == (str(g.user["_id"]) if g.user else ""),
+                        "其他页面的登录账号已变化，本次操作未执行，请确认当前账号", status=409, code="account_changed")
             if g.user and request.path not in ("/api/auth/login", "/api/auth/register"):
                 require(secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), g.login_session["csrf"]), "会话校验失败，请刷新页面", status=403)
 
@@ -106,6 +111,7 @@ def create_app(config=None):
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
         if request.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Survey-User"] = str(g.user["_id"]) if g.user else ""
         return response
 
     def login_required(fn):
@@ -149,6 +155,7 @@ def create_app(config=None):
         return response
 
     @app.get("/")
+    @app.get("/library")
     @app.get("/survey/<sid>")
     def page(sid=None):
         return render_template("index.html")
@@ -216,6 +223,7 @@ def create_app(config=None):
             changes["deadline"] = deadline(changes["deadline"])
         candidate = {**original, **changes}
         check_shape(candidate)
+        protect_provenance(original, candidate)
         require(not original["versionCounter"] or candidate["allowMultipleSubmissions"] == original["allowMultipleSubmissions"], "重复填写设置首次发布后不可修改")
         if original["status"] == "published":
             require(all(candidate[key] == original[key] for key in editable - {"deadline"}), "请先关闭问卷，再修改内容", status=409)
@@ -396,9 +404,11 @@ def create_app(config=None):
         app.logger.exception("MongoDB operation failed")
         return reply({"error": "数据库操作失败，本次操作未确认成功，请使用原请求重试", "code": "database_error"}, 503)
 
+    register_library(app, db, client, login_required, owned, reply, body, transaction, oid, now)
     return app
 
 
 if __name__ == "__main__":
     from waitress import serve
-    serve(create_app(), host="127.0.0.1", port=int(os.getenv("SURVEY_PORT", "5000")), threads=8)
+    serve(create_app(), host="127.0.0.1", port=int(os.getenv("SURVEY_PORT", "5001")), threads=8)
+
